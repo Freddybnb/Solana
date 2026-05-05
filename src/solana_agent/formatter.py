@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from solana_agent.bundle_detector import BundleReport
 from solana_agent.rug_detector import RiskReport
 from solana_agent.token_analyzer import TokenInfo
 from solana_agent.wallet_analyzer import WalletProfile
@@ -207,6 +208,123 @@ def print_dev_analysis(data: dict) -> None:
     console.print(Panel(data.get("recommendation", ""), title="Recommandation", border_style="yellow"))
 
 
+def print_bundle_report(report: BundleReport) -> None:
+    color = risk_color(report.risk_level)
+
+    # Header
+    header = Text()
+    title = report.token_name or report.mint[:16] + "..."
+    header.append(f"  DETECTION BUNDLE - {title}  \n", style="bold")
+    header.append(f"  Score: {report.bundle_score}/100  ", style=color)
+    header.append(f"  Niveau: {report.risk_level}  ", style=color)
+    if report.is_bundled:
+        header.append("\n  BUNDLE DETECTE  ", style="bold red on white")
+    console.print(Panel(header, border_style=color.split()[-1] if " " in color else color))
+
+    # Stats table
+    stats = Table(title="Statistiques du lancement", border_style="cyan")
+    stats.add_column("Metrique", style="bold cyan", width=30)
+    stats.add_column("Valeur", style="white")
+
+    stats.add_row("Acheteurs initiaux analyses", str(report.total_early_buyers))
+    stats.add_row(
+        "Acheteurs meme bloc/slot",
+        Text(str(report.same_block_buyers), style="red" if report.same_block_buyers >= 3 else "yellow"),
+    )
+    stats.add_row(
+        "Groupes de wallets lies",
+        Text(str(len(report.linked_wallets)), style="red" if report.linked_wallets else "green"),
+    )
+    if report.first_slot:
+        stats.add_row("Premier slot", str(report.first_slot))
+    console.print(stats)
+
+    # Early buyers table
+    if report.early_wallets:
+        w_table = Table(title="Premiers acheteurs", border_style="yellow")
+        w_table.add_column("#", width=4)
+        w_table.add_column("Wallet", width=46)
+        w_table.add_column("Slot", width=12)
+        w_table.add_column("SOL depense", width=14)
+        w_table.add_column("Tokens recus", width=18)
+        w_table.add_column("Funde par", width=16)
+
+        for i, w in enumerate(report.early_wallets[:15], 1):
+            funded = w.funded_by[:12] + "..." if w.funded_by else "-"
+            w_table.add_row(
+                str(i),
+                w.address,
+                str(w.bought_in_slot),
+                f"{w.sol_spent:.4f}" if w.sol_spent > 0 else "-",
+                f"{w.token_amount:,.2f}",
+                funded,
+            )
+        console.print(w_table)
+
+    # Linked wallet groups
+    if report.linked_wallets:
+        console.print(Panel(
+            "[bold red]WALLETS LIES DETECTES[/bold red]",
+            border_style="red",
+        ))
+        for i, group in enumerate(report.linked_wallets, 1):
+            g_table = Table(title=f"Groupe {i} - Source: {group[0][:20]}...", border_style="red")
+            g_table.add_column("Role", width=12)
+            g_table.add_column("Adresse", width=50)
+
+            g_table.add_row(
+                Text("SOURCE", style="bold red"),
+                group[0],
+            )
+            for addr in group[1:]:
+                g_table.add_row(
+                    Text("Funde", style="yellow"),
+                    addr,
+                )
+            console.print(g_table)
+
+    # Slot distribution
+    if report.same_slot_groups and len(report.same_slot_groups) > 1:
+        slot_table = Table(title="Distribution par slot/bloc", border_style="magenta")
+        slot_table.add_column("Slot", width=15)
+        slot_table.add_column("Nb acheteurs", width=15)
+        slot_table.add_column("Alerte", width=20)
+
+        for slot in sorted(report.same_slot_groups.keys()):
+            wallets = report.same_slot_groups[slot]
+            count = len(wallets)
+            alert = Text("SUSPECT", style="red") if count >= 3 else Text("-", style="dim") if count == 1 else Text("A surveiller", style="yellow")
+            slot_table.add_row(str(slot), str(count), alert)
+        console.print(slot_table)
+
+    # Summary
+    console.print(Panel(report.summary, title="Analyse", border_style="yellow"))
+
+    # Recommendation
+    if report.is_bundled:
+        console.print(Panel(
+            "DANGER: Ce token a tres probablement ete lance avec un bundle. "
+            "Le dev controle plusieurs wallets et cache la concentration reelle. "
+            "Les holders apparents sont probablement le meme individu. EVITEZ.",
+            title="Recommandation",
+            border_style="red",
+        ))
+    elif report.bundle_score >= 30:
+        console.print(Panel(
+            "Quelques signes de coordination detectes. Verifiez manuellement "
+            "les wallets et surveillez les mouvements. Prudence conseillee.",
+            title="Recommandation",
+            border_style="yellow",
+        ))
+    else:
+        console.print(Panel(
+            "Pas de signe evident de bundle. Le lancement semble organique. "
+            "Restez vigilant et verifiez les autres indicateurs de risque.",
+            title="Recommandation",
+            border_style="green",
+        ))
+
+
 def print_help() -> None:
     help_table = Table(title="Commandes disponibles", border_style="blue")
     help_table.add_column("Commande", style="bold cyan", width=40)
@@ -217,6 +335,7 @@ def print_help() -> None:
         ("risque <mint>", "Analyse de risque / detection rug pull"),
         ("holders <mint>", "Distribution des holders d'un token"),
         ("wallet <adresse>", "Profil complet d'un wallet"),
+        ("bundle <mint>", "Detection de bundled launch (achats coordonnes)"),
         ("dev <adresse_dev> <mint>", "Analyse d'un wallet dev en contexte d'un token"),
         ("tx <adresse>", "Transactions recentes d'une adresse"),
         ("balance <adresse>", "Balance SOL d'un wallet"),

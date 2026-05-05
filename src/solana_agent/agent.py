@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from solana_agent import formatter
+from solana_agent.bundle_detector import BundleDetector
 from solana_agent.helius_client import HeliusClient
 from solana_agent.rug_detector import RugDetector
 from solana_agent.token_analyzer import TokenAnalyzer
@@ -22,6 +23,7 @@ class SolanaMemecoinAgent:
         self.token_analyzer = TokenAnalyzer(self.client)
         self.rug_detector = RugDetector(self.client)
         self.wallet_analyzer = WalletAnalyzer(self.client)
+        self.bundle_detector = BundleDetector(self.client)
 
     def close(self) -> None:
         self.client.close()
@@ -81,6 +83,14 @@ class SolanaMemecoinAgent:
                 formatter.console.print("[red]Usage: dev <adresse_dev> <mint_token>[/red]")
             return
 
+        if lower.startswith("bundle ") or lower.startswith("bundled "):
+            addr = self._extract_address(text)
+            if addr:
+                self._cmd_bundle_analysis(addr)
+            else:
+                formatter.console.print("[red]Adresse invalide. Usage: bundle <mint_address>[/red]")
+            return
+
         if lower.startswith("tx ") or lower.startswith("transactions "):
             addr = self._extract_address(text)
             if addr:
@@ -128,6 +138,18 @@ class SolanaMemecoinAgent:
         formatter.console.print(f"[dim]Analyse du wallet {address[:16]}...[/dim]")
         profile = self.wallet_analyzer.analyze_wallet(address)
         formatter.print_wallet_profile(profile)
+
+    def _cmd_bundle_analysis(self, mint: str) -> None:
+        formatter.console.print(f"[dim]Detection de bundle pour {mint[:16]}... (analyse des premieres transactions)[/dim]")
+        # Get token name first
+        token_name = ""
+        try:
+            info = self.token_analyzer.analyze_token(mint)
+            token_name = f"{info.name} ({info.symbol})"
+        except Exception:
+            pass
+        report = self.bundle_detector.analyze_bundle(mint, token_name=token_name)
+        formatter.print_bundle_report(report)
 
     def _cmd_dev_analysis(self, dev_addr: str, mint: str) -> None:
         formatter.console.print(
@@ -208,6 +230,12 @@ class SolanaMemecoinAgent:
         wallet_keywords = ["wallet", "portefeuille", "adresse", "compte"]
         if any(kw in lower for kw in wallet_keywords) and addr:
             self._cmd_wallet(addr)
+            return
+
+        # Bundle detection
+        bundle_keywords = ["bundle", "bundled", "coordonne", "coordinated", "snipe", "sniped"]
+        if any(kw in lower for kw in bundle_keywords) and addr:
+            self._cmd_bundle_analysis(addr)
             return
 
         # Dev questions

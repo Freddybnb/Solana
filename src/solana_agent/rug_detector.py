@@ -58,6 +58,7 @@ class RugDetector:
 
         # Additional on-chain checks
         self._check_recent_large_transactions(mint, report)
+        self._check_bundled_launch(mint, token_info, report)
 
         # Calculate final score
         report.risk_score = min(100, sum(f.score for f in report.flags))
@@ -157,6 +158,30 @@ class RugDetector:
                 ),
                 score=RISK_WEIGHTS["dev_holding"],
             ))
+
+    def _check_bundled_launch(self, mint: str, token: TokenInfo, report: RiskReport) -> None:
+        """Check if the token was launched with bundled buys."""
+        try:
+            from solana_agent.bundle_detector import BundleDetector
+            detector = BundleDetector(self.client)
+            bundle_report = detector.analyze_bundle(mint, token_name=token.name)
+            if bundle_report.is_bundled:
+                severity = "CRITIQUE" if bundle_report.bundle_score >= 70 else "ELEVE"
+                score = 20 if bundle_report.bundle_score >= 70 else 15
+                groups_text = f"{len(bundle_report.linked_wallets)} groupe(s) lies" if bundle_report.linked_wallets else "wallets suspects"
+                report.flags.append(RiskFlag(
+                    name="BUNDLED_LAUNCH",
+                    severity=severity,
+                    description=(
+                        f"Launch bundle detecte (score: {bundle_report.bundle_score}/100). "
+                        f"{bundle_report.same_block_buyers} acheteurs dans les premiers blocs, {groups_text}. "
+                        "Le dev a probablement achete avec plusieurs wallets pour cacher la concentration. "
+                        "Utilisez 'bundle <mint>' pour l'analyse complete."
+                    ),
+                    score=score,
+                ))
+        except Exception:
+            pass
 
     def _check_recent_large_transactions(self, mint: str, report: RiskReport) -> None:
         """Check for suspicious large recent transactions."""
